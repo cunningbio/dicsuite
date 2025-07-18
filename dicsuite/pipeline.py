@@ -105,7 +105,7 @@ def to_uint8(image):
     image = np.clip(image, 0, None)
     return (255 * image / image.max()).astype(np.uint8)
 
-def qpi_reconstruct_batch(files_in, out_dir = None,smooth_in = 1, stabil_in = 0.0001, mode = "stack", infer_from_first = True, shear_angle = None, rotate_correct = True, use_gpu = False):
+def qpi_reconstruct_batch(files_in, out_dir = None,smooth_in = 1, stabil_in = 0.0001, mode = "stack", infer_from_first = True, shear_angle = None, use_gpu = False):
     """
     Handles the batch or single running of the reconstruction algorithm.
 

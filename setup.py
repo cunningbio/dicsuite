@@ -4,12 +4,14 @@ setup(
     name='dicsuite',
     version='0.1.0',
     packages=find_packages(),
+    python_requires='>=3.8, <3.12',
     install_requires=[
         'numpy',
         'scipy',
         'scikit-image',
-        'matplotlib',
-        'pillow'
+        'pandas',
+        'opencv-python',
+        'tqdm'
     ],
     extras_require={
         'gpu': ['cupy-cuda12x']  # user installs correct CUDA version

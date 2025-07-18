@@ -1,8 +1,13 @@
-# example usage script: examples/run_recon.py
-import matplotlib.pyplot as plt
-from qpi_toolkit import qpi_reconstruct
+from dicsuite.pipeline import qpi_reconstruct_batch
+from pathlib import Path
 
-img = plt.imread("your_image.tif")
-recon = qpi_reconstruct(img, use_gpu=True)
-plt.imshow(recon)
-plt.show()
+# Set path to image
+input_image = Path(__file__).parent / "agar_beads.tiff"
+output_dir = Path(__file__).parent / "output"
+
+# Run a basic reconstruction with defaults
+qpi_reconstruct_batch(
+    files_in=input_image,
+    out_dir=output_dir,
+    infer_from_first=False
+)
