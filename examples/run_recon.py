@@ -9,5 +9,6 @@ output_dir = Path(__file__).parent / "output"
 qpi_reconstruct_batch(
     files_in=input_image,
     out_dir=output_dir,
-    infer_from_first=False
+    infer_from_first=False,
+    contrast_adj=True
 )

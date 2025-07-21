@@ -74,7 +74,7 @@ def pad_fft(arr, img, xp):
         (img.shape[0] - math.ceil(arr.shape[0] / 2), img.shape[0] - math.ceil(arr.shape[0] / 2)),
         (img.shape[1] - math.ceil(arr.shape[1] / 2), img.shape[1] - math.ceil(arr.shape[1] / 2))),
                      constant_values=0)
-    smooth_trans = xp.fft.fftshift(xp.fft.fft2(arr_pad))
+    return xp.fft.fftshift(xp.fft.fft2(arr_pad))
 
 def create_psf(shear_angle):
     if shear_angle % 45 != 0:
@@ -120,24 +120,24 @@ def compute_shear(image, von_mises = True):
         # Sum of all gradient pixels
         gradient_sum[x] = xp.sum(gradient)
 
-        ## Estimate shear angle depending on approach specified
-        if von_mises:
-            # Fit von Mises distribution and extract mu
-            from scipy.stats import vonmises
-            # Shift data so minimum is at angle 0°
-            min_grad = np.argmin(gradient_sum)
-            grad_shifted = np.concatenate((gradient_sum[min_grad:], gradient_sum[:min_grad]))
+    ## Estimate shear angle depending on approach specified
+    if von_mises:
+        # Fit von Mises distribution and extract mu
+        from scipy.stats import vonmises
+        # Shift data so minimum is at angle 0°
+        min_grad = np.argmin(gradient_sum)
+        grad_shifted = np.concatenate((gradient_sum[min_grad:], gradient_sum[:min_grad]))
 
-            # Expand the shifted frequency distribution into data points
-            circ_data = np.deg2rad(np.repeat(np.arange(0, 180), grad_shifted.astype(int)))  # Convert to radians too!
+        # Expand the shifted frequency distribution into data points
+        circ_data = np.deg2rad(np.repeat(np.arange(0, 180), grad_shifted.astype(int)))  # Convert to radians too!
 
-            # Fit the Von Mises distribution and extract mu
-            circ_data = vonmises.fit(circ_data, fscale=1)[1]  # fix scale=1 for circular
-            # Finally, convert to degree and re-adjust based on the original shift
-            return((np.rad2deg(circ_data) + min_grad) % 180)  # Use modulus to wrap back to 0–180 domain
-        else:
-            # If not specified, just extract the maximum of the distribution
-            return((np.argmax(gradient_sum) * 180) / n_dir)
+        # Fit the Von Mises distribution and extract mu
+        circ_data = vonmises.fit(circ_data, fscale=1)[1]  # fix scale=1 for circular
+        # Finally, convert to degree and re-adjust based on the original shift
+        return((np.rad2deg(circ_data) + min_grad) % 180)  # Use modulus to wrap back to 0–180 domain
+    else:
+        # If not specified, just extract the maximum of the distribution
+        return((np.argmax(gradient_sum) * 180) / n_dir)
 
 def draw_shear_vector(image, shear_angle):
     """
@@ -257,4 +257,4 @@ def qpi_reconstruct(image, smooth_in = 1, stabil_in = 0.0001, shear_angle=None, 
                         recon_out.shape[1] - ((recon_out.shape[1] - image_dim[1]) / 2))]
         shear_angle = rerotate  # Output complete, non-rounded shear angle for future work!
 
-    return recon_out
+    return recon_out, psf_trans, smooth_trans

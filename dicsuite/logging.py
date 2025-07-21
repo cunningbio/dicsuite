@@ -20,20 +20,21 @@ def load_shear_log(log_path, img_path):
     # Check if log exists - if so, read in!
     if log_path.exists():
         print("Shear angle registry found!")
-        shear_df = pd.read_csv(log_path)
+        shear_df = pd.read_csv(log_path, index_col=0)
 
         # Ensure logs contain necessary columns and store matching registry
         if "Image_Path" not in shear_df.columns or "Shear_Angle" not in shear_df.columns:
             raise ValueError("Log file must contain 'Image_Path' and 'Shear_Angle' columns.")
         matching = shear_df[shear_df["Image_Path"] == img_path]
 
-        # Next, check the match to ensure we have either 1 or 0 registers
+        # Next, check the match to ensure we have either 1 or 0 registers - if more than one, return an error
         if len(matching) == 1:
             print("Shear angle found in registry! Skipping shear computation...")
             return shear_df, float(matching["Shear_Angle"].iloc[0])
         elif len(matching) > 1:
             raise ValueError("Multiple matching shear angles in registry — wipe and try again!")
         else:
+            # If no register is found, return none
             print("Shear angle not found in registry, computing...")
             return shear_df, None
 
@@ -48,10 +49,9 @@ def load_shear_log(log_path, img_path):
 
 
 def update_shear_log(log_df, image_path, angle):
-    shear_out = pd.DataFrame([{"Name": image_path, "ShearAngle": angle}])
+    shear_out = pd.DataFrame([{"Image_Path": image_path, "Shear_Angle": angle}])
     # If registry is empty, just capture the new output as the full registry
     shear_out = (shear_out.copy() if log_df.empty else pd.concat([log_df, shear_out], ignore_index=True))
-
     return shear_out
 
 def save_shear_log(log_df, path):

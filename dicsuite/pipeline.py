@@ -1,5 +1,6 @@
 import cv2
 from concurrent.futures import ThreadPoolExecutor
+import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import warnings
@@ -44,10 +45,10 @@ def _get_output_path(file_name, out_dir, smooth_i, stabil_i, smooth_len, stabil_
     elif stabil_len > 1:
         out_dir = out_dir / param_to_str("Stab",str(round(stabil_i, 8)))
     else:
-        out_dir = out_dir / file_name
+        out_dir = out_dir / file_name.name
 
     write_dir = out_dir.with_suffix(".tiff")
-    Path(write_dir).mkdir(parents=True, exist_ok=True)
+    Path(write_dir).parent.mkdir(parents=True, exist_ok=True)
 
     return write_dir
 
@@ -71,11 +72,9 @@ def _load_image_stack(file_list, batch_size=64, num_threads=8):
             batch_files = file_list[i:i+batch_size]
             # Now simply read through and append to the output list! No error catching here, but we can be permissive with input
             batch = list(executor.map(_read_image, batch_files))
-            image_out.append(batch)
+            image_out.extend(batch)
 
     return image_out
-
-import numpy as np
 
 def _preprocess_image(image):
     """
@@ -105,7 +104,22 @@ def to_uint8(image):
     image = np.clip(image, 0, None)
     return (255 * image / image.max()).astype(np.uint8)
 
-def qpi_reconstruct_batch(files_in, out_dir = None,smooth_in = 1, stabil_in = 0.0001, mode = "stack", infer_from_first = True, shear_angle = None, use_gpu = False):
+def contrast_adjust(image):
+    """
+    Perform rudimentary contrast adjustment, based on quartile normalisation.
+    Assumed 8-bit input.
+    """
+    # Intially, try setting bottom quartile as minimum
+    img_out = image - np.quantile(image, 0.25)
+    img_out[img_out < 0] = 0
+    # Finally, set the upper 1% as maximum and squash anything above 255
+    img_out = img_out * (255 / np.quantile(img_out, 0.99))
+    img_out[img_out > 255] = 255
+    return(img_out.astype(np.uint8))
+
+def qpi_reconstruct_batch(files_in, out_dir = None, smooth_in = 1, stabil_in = 0.0001,
+                          mode = "stack", infer_from_first = True, shear_angle = None,
+                          contrast_adj = False, use_gpu = False):
     """
     Handles the batch or single running of the reconstruction algorithm.
 
@@ -153,41 +167,47 @@ def qpi_reconstruct_batch(files_in, out_dir = None,smooth_in = 1, stabil_in = 0.
         img, file_name, shear = values
         # Before processing anything, normalise input image to scale between 0 and 1, and transfer to GPU as needed
         img = _preprocess_image(img)
-        image = xp.asarray(image)  # CuPy or NumPy, depending on backend
+        img = xp.asarray(img)  # CuPy or NumPy, depending on backend
 
         ## Shear angle handling
         # If shear angle is not provided, compute shear angles where needed
         if shear is None:
             # If not inferring from the first image, or if it's the first loop, get shear angle and image dimensions
             if not infer_from_first or i == 0:
+                # Check for logs firstly
+                log_exists = False
                 shear_df, shear = load_shear_log(out_dir["logs"], file_name)
+                # If no log exists, compute manually
                 if shear is None:
                     shear = compute_shear(img)
+
+                    # This is the perfect time to write out to registry and save an overlay image for shear angle QC
+                    shear_df = update_shear_log(shear_df, file_name, shear)
+                    save_shear_log(shear_df, out_dir["logs"])
+                    # To create and write out the shear angle overlay image
+                    shear_overlay = draw_shear_vector(img, shear)
+                    shear_overlay = to_uint8(shear_overlay)
+                    # Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
+                    cv2.imwrite((out_dir["qc"] / Path(file_name).stem).with_suffix(".tiff"),
+                                ensure_numpy(shear_overlay))
+
                 # Store first computed shear if to be used for stack processing
                 if i == 0:
                     first_shear = shear
-                ## This is also the perfect time to write out to registry and save an overlay image for shear angle QC
-                # Write to registry
-                shear_df = update_shear_log(shear_df, file_name, shear)
-                save_shear_log(out_dir["logs"], shear_df)
-                # To create and write out the shear angle overlay image
-                shear_overlay = draw_shear_vector(img, shear)
-                shear_overlay = to_uint8(shear_overlay)
-                # Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
-                cv2.imwrite((out_dir["qc"] / Path(file_name).stem).with_suffix(".tiff"), ensure_numpy(shear_overlay))
-            # If
+
+            # If inferring from first image and not first run, use the stashed shear angle for reconstruction
             else:
                 shear = first_shear
 
         # If in stack mode, perform check to ensure stack images are all the same dimension and create PSF and smoothing kernels
+        # This workflow will prevent the need for unnecessary reprocessing through the image stack
         if mode == "stack" and i == 0:
             # For the first image, store expected dimensions and create stock input fields
             ndim = img.shape
-            # Create a PSF to feed into all reconstructions
-            psf_share = create_psf(shear)
-            psf_share = pad_fft(psf_share,img,xp)
-            # And do the same for a smoothing kernel
-            smooth_share = pad_fft(xp.array([[1, 1, 1], [1, -8, 1], [1, 1, 1]], dtype=float) / 8, img, xp)
+            # If running in stack, I'll also want to write out PSF and smoothing matrices to prevent computation each iteration
+            # Store these variables as empty to begin with, to capture from first run
+            psf_stack = None
+            smooth_stack = None
         # For images in a stack following the first, ensure dimensions conform
         elif mode == "stack":
             if img.shape != ndim:
@@ -198,13 +218,17 @@ def qpi_reconstruct_batch(files_in, out_dir = None,smooth_in = 1, stabil_in = 0.
         for smooth_it in smooth_in:
             for stabil_it in stabil_in:
                 if mode == "stack":
-                    img_recon = qpi_reconstruct(img, smooth_in=smooth_it, stabil_in=stabil_it, shear_angle=shear,
-                                             psf_trans=psf_share, smooth_trans=smooth_share)
+                    img_recon, psf_stack, smooth_stack = qpi_reconstruct(img, smooth_in=smooth_it, stabil_in=stabil_it, shear_angle=shear, psf_trans=psf_stack, smooth_trans=smooth_stack)
                 else:
-                    img_recon = qpi_reconstruct(img, shear_angle=shear)
+                    img_recon, psf_stack, smooth_stack = qpi_reconstruct(img, shear_angle=shear)
+
+                # Before writing out, convert to 8-bit image format and adjust contrast if desired
+                img_recon = to_uint8(img_recon)
+                if contrast_adj:
+                    img_recon = contrast_adjust(img_recon)
+
                 # Look for correct output directory before writing out reconstruction
                 write_file = _get_output_path(file_name, out_dir["recon"], smooth_it, stabil_it, len(smooth_in), len(stabil_in))
-                img_recon = to_uint8(img_recon)
                 # Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
                 cv2.imwrite(write_file, ensure_numpy(img_recon))
 
