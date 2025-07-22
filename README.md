@@ -1,6 +1,7 @@
 # DICsuite
 
 ---
+![DICsuite Logo](images/DICsuite-Logo_Cropped.png)
 ## A Python package for reconstructing DIC images
 
 While (currently) barebones, this package provides functonality for estimating shear angle and inverse filtering-based reconstruction for DIC microscopy. Future updates are to come to incorporate the following features:
@@ -24,7 +25,6 @@ To install dependencies:
 pip install -r requirements.txt
 ```
 
-
 #### Optional GPU Support
 If you want to use GPU acceleration, install CuPy separately:
 
@@ -32,3 +32,7 @@ If you want to use GPU acceleration, install CuPy separately:
 pip install cupy-cuda12x
 ```
 
+#### Acknowledgements
+Citation details are being finalised, pending inclusion of additonal reconstruction methodologies.
+Logo image generated using the microlith MATLAB package, as described in Mehta and Oldenbourg (2014).
+Citation: Mehta, S. B., & Oldenbourg, R. (2014). Image simulation for biological microscopy: microlith. Biomed Opt Express, 5(6):1822-1838.
