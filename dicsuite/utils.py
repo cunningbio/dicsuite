@@ -4,8 +4,8 @@ def param_to_str(name, value):
     """
     Helper function to format input parameters into filenames.
     """
-    # Realistically, minus values aren't likely to be passed here - but included handling for potential future use-cases!
-    val = str(value).replace('.', '_').replace('-', 'm')  # m for minus
+    # Realistically, minus values aren't likely to be passed here - commented out handling for potential future use-cases!
+    val = str(value).replace('.', '_')#.replace('-', 'm')  # m for minus
     return f"{name}-{val}"
 
 # To cast input as iterable if needed

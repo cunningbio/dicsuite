@@ -35,7 +35,7 @@ def linear_strel(se_length, se_angle, xp = None):
         se_length (int): 2D grayscale image, preferably float32.
         se_angle (int): Angle of shear in degrees.
         xp (module, optional): Array-processing module to use (e.g., numpy or cupy).
-            If None, the appropriate backend is selected automatically based on the input array.
+            If None, NumPy is used by default.
 
     Returns:
         xp.ndarray: Linear structural element.
@@ -43,14 +43,14 @@ def linear_strel(se_length, se_angle, xp = None):
     """
     # Determine CPU/GPU processing
     if xp is None:
-        xp = get_array_module(xp)
+        xp = np
 
     # If the angle supplied is > 180, squash to fit between 0-180
     se_angle = se_angle if (se_angle <= 180) else se_angle - (180 * (se_angle // 180))
     # Calculate the start and end points of the line to fit the array
-    angle_rad = xp.deg2rad(se_angle) # Convert to radians
-    x2 = abs(round(se_length * xp.cos(angle_rad)))
-    y2 = abs(round(se_length * xp.sin(angle_rad)))
+    angle_rad = np.deg2rad(se_angle) # Convert to radians
+    x2 = abs(round(se_length * np.cos(angle_rad)))
+    y2 = abs(round(se_length * np.sin(angle_rad)))
     # Ensure dimensions are odd to define a proper center
     x2 = x2 + 1 if x2 % 2 == 1 else x2
     y2 = y2 + 1 if y2 % 2 == 1 else y2
@@ -145,7 +145,7 @@ def draw_shear_vector(image, shear_angle):
 
     Args:
         image (numpy.ndarray or cupy.ndarray): Image array to overlay shear vector onto. Assumed to be normalised.
-        shear_angle (str): Full path to the image to be processed.
+        shear_angle (int): Shear angle to overlay
 
     Returns:
         numpy.ndarray or cupy.ndarray: Grayscale image array with shear vector overlay.
@@ -154,7 +154,7 @@ def draw_shear_vector(image, shear_angle):
     # Get module for handling numeric data, using input image type to infer CPU or GPU processing
     xp = get_array_module(image)
     # Overlay shear angle indicator by creating an appropriate line matrix and expand to match dim of input image
-    shear_overlay = linear_strel(min(image.shape) - 2, shear_angle)  # Use smaller of row/column sizes, so no possibility of linear matrix outsizing input
+    shear_overlay = linear_strel(min(image.shape) - 2, shear_angle, xp)  # Use smaller of row/column sizes, so no possibility of linear matrix outsizing input
     shear_overlay = xp.pad(shear_overlay, ((math.ceil((image.shape[0] - shear_overlay.shape[0]) / 2),
                                             math.floor((image.shape[0] - shear_overlay.shape[0]) / 2)),
                                            (math.ceil((image.shape[1] - shear_overlay.shape[1]) / 2),
@@ -214,7 +214,6 @@ def qpi_reconstruct(image, smooth_in = 1, stabil_in = 0.0001, shear_angle=None, 
 
     # Round the estimated direction to the nearest multiple of 45 degrees
     shear_angle = np.round(shear_angle / 45) * 45
-    print("Shear angle rounded to: " + str(xp.round(shear_angle, 2)))
 
     # If PSF or smoothing kernels aren't provided, create here and pad with 0s to match dimensions of input image
     # Padding ensures the kernel is centered and ready for Fourier transform
