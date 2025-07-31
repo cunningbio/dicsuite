@@ -1,0 +1,26 @@
+[project]
+name = "dicsuite"
+version = "0.1.1"
+description = "DIC-to-QPI Reconstruction Toolkit with CPU/GPU support"
+authors = [
+    {name = "Richard Cunningham",email = "ricky-cunningham@live.com"}
+]
+license = {text = "BSD 3-Clause"}
+readme = "README.md"
+requires-python = ">=3.8, <3.12"
+dependencies = [
+    "numpy>=2.1.3",
+    "opencv-python>=4.10.0",
+    "pandas>=2.2.3",
+    "scikit-image>=0.24.0",
+    "scipy>=1.14.1",
+    "tqdm>=4.67.1",
+    "matplotlib>=3.10.0"
+]
+
+[project.optional-dependencies]
+gpu = ["cupy-cuda12x"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
