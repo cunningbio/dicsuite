@@ -60,6 +60,22 @@ def update_shear_log(log_df, image_path, angle):
 def save_shear_log(log_df, path):
     log_df.to_csv(path / "shear_angle_log.csv")
 
+def save_quality(qual_df, path):
+    # Firstly, save as data frame from the list of dictionaries and create registry path from log path
+    qual_df = pd.DataFrame(qual_df)
+    reg_path = path / "recon_metrics.csv"
+    # Next, if a previous registry was saved, read this in to update
+    if reg_path.exists():
+        old_df = pd.read_csv(reg_path)
+        qual_df = pd.concat([old_df, qual_df], ignore_index=True)
+
+    # Drop duplicates based on file names and input parameters
+    qual_df = qual_df.drop_duplicates(subset=["File", "Smoothing", "Stability"], keep="last")
+    # Sort and write to CSV
+    qual_df = qual_df.sort_values(by=["File", "Smoothing", "Stability"], ascending=[True, True, True])
+    qual_df.to_csv(reg_path, index=False)
+
+
 def create_collage_grid(images, parameters, out_dir, file_name, cmap='gray'):
     """
     Write out collage of images, based on combinations of reconstruction input parameters.

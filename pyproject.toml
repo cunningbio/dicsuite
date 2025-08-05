@@ -1,6 +1,6 @@
 [project]
 name = "dicsuite"
-version = "0.1.1"
+version = "0.1.2"
 description = "DIC-to-QPI Reconstruction Toolkit with CPU/GPU support"
 authors = [
     {name = "Richard Cunningham",email = "ricky-cunningham@live.com"}

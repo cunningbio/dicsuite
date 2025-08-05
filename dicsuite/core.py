@@ -2,28 +2,9 @@ import math
 import numpy as np
 from skimage.draw import line
 from skimage.transform import rotate as sk_rotate
-from skimage.restoration import wiener
 
 from .backend import get_array_module, get_filter_backend
 from .utils import ensure_list
-
-
-## Helper functions to optionally measure various quality metrics for reconstruction.
-def _analyze_sharpness(image_in, mod):
-    lap_in = mod.laplace(image_in)
-    return lap_in.var()
-
-def _analyze_contrast(image_in, mod):
-    lap_in = mod.laplace(image_in)
-    # Clarity (using a simple combination of sharpness and contrast)
-    return lap_in.var() * image_in.std()
-
-def _analyze_resolution(image_in, xp, mod):
-    # Resolution (using Sobel operator)
-    sobel_x = mod.sobel(image_in, axis=1)
-    sobel_y = mod.sobel(image_in, axis=0)
-    sobel_out = xp.sqrt(sobel_x**2 + sobel_y**2)
-    return xp.mean(sobel_out)
 
 ## All defined functions assume images are normalised with pixel intensities between 0-1
 def linear_strel(se_length, se_angle, xp = None):
@@ -208,7 +189,7 @@ def qpi_reconstruct(image, smooth_in = 1, stabil_in = 0.0001, shear_angle=None, 
     # If correcting for shear angle rounding errors, rotate the image to match the shear angle and set angle to 0
     if rotate_correct:
         image_dim = image.shape
-        image = filter_module.rotate(image, -shear_angle, reshape=True)  # Setting order to 0 gets around need to check 45 degree compatibility
+        image = filter_module.rotate(image, -shear_angle, reshape=True, mode = "nearest")
         rerotate = shear_angle
         shear_angle = 0
 

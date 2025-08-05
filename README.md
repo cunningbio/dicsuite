@@ -1,19 +1,23 @@
-# DICsuite
+<img src="images/DICsuite-Logo.png" width="250" title="DICsuite Logo" alt="Logo" align="centre" vspace = 25>
 
----
-![DICsuite Logo](images/DICsuite-Logo.png)
 
 ![GitHub License](https://img.shields.io/github/license/cunningbio/dicsuite)
 ![Version](https://img.shields.io/github/v/tag/cunningbio/dicsuite?label=version)
 ![Last Commit](https://img.shields.io/github/last-commit/cunningbio/dicsuite)
----
-## A Python package for reconstructing DIC images
 
-While (currently) barebones, this package provides functonality for estimating shear angle and inverse filtering-based reconstruction for DIC microscopy. Future updates are to come to incorporate the following features:
+# DICsuite
+### A Python package for DIC-to-QPI reconstruction
+
+This package provides functonality for reconstructing a quantitative estimation of phase from DIC microscopy.
+In its current state, this is implemented by  shear angle estimation and inverse filtering-based reconstruction.
+Logging and QC interfaces track computed shear angles, as well as a variety of quality metrics to assist users in selecting optimal input parameters for reconstruction. 
+
+Future updates are to come to incorporate the following features:
+
 - Additional reconstruction/contrast adjustment methods
-- Optional quality metrics for optimising input parameter selection 
 - CellPose interfacing for DIC-powered cell segmentation
-
+- Deep learning-powered reconstruction algorithms
+---
 #### Quickstart
 To run a sample reconstruction using the provided agar bead image:
 
@@ -36,7 +40,7 @@ If you want to use GPU acceleration, install CuPy separately:
 ```bash
 pip install cupy-cuda12x
 ```
-
+---
 #### Acknowledgements
 Citation details are being finalised, pending inclusion of additonal reconstruction methodologies.
 
