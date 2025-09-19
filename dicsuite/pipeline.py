@@ -1,19 +1,19 @@
 import cv2
 from concurrent.futures import ThreadPoolExecutor
-from itertools import product
 import numpy as np
 from pathlib import Path
 
 from dicsuite.metrics import analyse_shear
-#from tqdm import tqdm
 from tqdm.auto import tqdm
 from typing import List, Optional
 import warnings
 
 from .backend import get_array_module, get_filter_backend
-from .core import qpi_reconstruct, compute_shear, draw_shear_vector, create_psf, pad_fft
+from .core import compute_shear, draw_shear_vector
 from .logging import load_shear_log, update_shear_log, save_shear_log, save_quality
 from .metrics import analyse_contrast, analyse_sharpness, analyse_resolution
+from .reconstruction import *
+from .segmentation import run_cellpose
 from .types import ImageData, GeneralConfig, ReconstructionConfig, SegmentationConfig
 from .utils import param_to_str, ensure_list, ensure_numpy, prepare_output_folders, broadcast_param
 
@@ -50,15 +50,19 @@ def _get_output_dir(user_output=None):
     base_dir = Path().resolve()
     return base_dir / "dic_qpi_outputs"
 
-def _get_output_path(out_dir, smooth_i, stabil_i, smooth_len, stabil_len):
+def _get_output_path(out_dir, method, parameters):
     """Set output file name, creating output subdirectories based on input parameters if needed."""
-    # If smoothing parameter input is an array of to test (implied optimisation), need to create a subdirectory to write out to
-    if smooth_len > 1:
-        out_dir = (out_dir.with_suffix("") / param_to_str("Smooth", str(round(smooth_i, 8)))).with_suffix(".tiff")
-    if stabil_len > 1:
-        out_dir = (out_dir.with_suffix("") / param_to_str("Stab", str(round(stabil_i, 8)))).with_suffix(".tiff")
+    # Convert parameters to strings, compatible with writing out
+    param_parts = [param_to_str(pl, p) for pl, p in zip(parameters.keys(), parameters.values())]
+    # Begin creating the output path
+    out_dir = out_dir.with_suffix("") / method
+    # Iterate over the input parameters to continue building path
+    for part in param_parts:
+        out_dir = out_dir / str(part)
+    # Finally, cap with an extension to write
+    out_dir = out_dir.with_suffix(".tiff")
+    # Create the path if needed, then return
     Path(out_dir).parent.mkdir(parents=True, exist_ok=True)
-
     return out_dir
 
 def _read_image(file):
@@ -67,7 +71,7 @@ def _read_image(file):
 def _load_image_stack(file_list, batch_size=64, num_threads=8, recursive = False):
     """
     Load in either a single or list of image file(s) - multithread reading to reduce IO overhead.
-    Outputs a list of 2D NumPy arrays.
+    Outputs a list of ImageData objects.
     """
     # Firstly, handle user input to instantiate ImageData objects
     image_list = _get_ImageData(file_list, recursive)
@@ -112,7 +116,7 @@ def to_uint8(image):
     image = np.clip(image, 0, None)
     return (255 * image / image.max()).astype(np.uint8)
 
-def contrast_adjust(images, xp, lower_q=0.25, upper_q=0.99):
+def contrast_adjust(images, xp, lower_q=0.25, upper_q=0.95):
     """
     Perform rudimentary contrast adjustment, based on quartile normalisation.
     Assumed 8-bit input.
@@ -170,14 +174,16 @@ def qpi_reconstruct_batch(
             - recursive (bool): If true, directory input is searched through recursively to include all images.
             - infer_from_first (bool): If true, shear angle is to be computed only from first image, preferred for time-lapse image sequences.
             - contrast_adj (bool): If true, contrast of reconstructed images is adjusted to reduce noise
+            - lower_q (float): Lower quantile for contrast adjustment.
+            - upper_q (float): Upper quantile for contrast adjustment.
             - use_gpu (bool): True if GPU processing is preferred (default is False).
             - write_collage (bool): True if writing out a collage of reconstructed images - intended to QC input paramaters
+            - invert (bool): True if a negative of reconstructed output is desired
 
         reconstruction_config (ReconstructionConfig): Reconstruction-specific parameters.
             - method (str): reconstruction method to implement
-            - smooth_in (int or ndarray): Smoothing parameter. If multiple are passed, generate output for each specified.
-            - stabil_in (int or ndarray): Stability parameter. If multiple are passed, generate output for each specified.
             - shear_angle (float or list, optional): Shear angle of DIC image in degrees. If not specified, shear angle is estimated.
+            - method_params (dict):
             If working in stack mode, a single shear angle, if known, is expected, while for batch, a shear angle can be included for each image to reconstruct
 
         segmentation_config (SegmentationConfig): Segmentation-specific parameters - not implemented yet
@@ -186,129 +192,158 @@ def qpi_reconstruct_batch(
         xp.ndarray: Reconstructed image.
             ndarray of type matching xp (e.g., numpy.ndarray or cupy.ndarray)
     """
-    # First things first, set input as default if needed
+    # Preprocessing and parameter handling
+    ## First things first, set input as default if needed
     general_config = general_config or GeneralConfig()
     reconstruction_config = reconstruction_config or ReconstructionConfig()
     segmentation_config = segmentation_config or SegmentationConfig()
 
-    # Determine backend to use and cast input parameters as iterable if needed
+    ## Determine backend to use and cast input parameters as iterable if needed
     xp = get_array_module(prefer_gpu=general_config.use_gpu)
-    smooth_in = ensure_list(reconstruction_config.smooth_in)
-    stabil_in = ensure_list(reconstruction_config.stabil_in)
-    param_combinations = list(product(smooth_in, stabil_in)) # Create iterable set of input combinations for later
+    ## Process reconstruction method and input parameters
+    recon_method = RECON_METHODS[reconstruction_config.method]
+    recon = recon_method.from_config(reconstruction_config.method_params)
+    ## We'll also need parameter combinations for metadata saving and collage-making
+    recon_params = recon.param_combinations()
+
     # Read in image stack, returning populated ImageData objects
     images_in = _load_image_stack(files_in, recursive = general_config.recursive)
 
-    ## Before further processing, we need to set location for writing and reading - needed for logs
-    # Get path for output, depending on user input
+    # Before further processing, we need to set location for writing and reading - needed for logs
+    ## Get path for output, depending on user input
     out_dir = _get_output_dir(out_dir)
-    # Now create output directory/subdirectories if needed and store paths to dict
+    ## Now create output directory/subdirectories if needed and store paths to dict
     out_dir = prepare_output_folders(out_dir)
 
-    ## Instantiate the loop to process image stacks/batches
+    # Instantiate the loop to process image stacks/batches
     ## Before looping...
-    # Instantiate empty row for QC output
-    qual_mets = []
-    # Ensure that shear angle and file name input fits with number of images, and ensure iterable
+    ### Create a list to populate with dictionaries containing all necessary info while looping
+    recon_out = []
+
+    ### Capture the count of parameter combinations before iterating, so we can overwrite the parameters as we go
+    param_comb_count = recon.param_count()
+
+    ### Ensure that shear angle and file name input fits with number of images, and ensure iterable
     shear_angle = broadcast_param(reconstruction_config.shear_angle, len(images_in))
     iterable = zip(images_in, shear_angle)
 
-    # Then, begin looping!
+    ## Then, begin looping!
     for i, values in enumerate(tqdm(iterable, desc="Looping through images...", position=0)):
-    #for i, values in enumerate(iterable):
-        # Unpack the zipped variables
+        # First things first, instantiate a list to capture per-image reconstruction data for collage writing
+        image_out = []
+        ## Unpack the zipped variables
         img_data, shear = values
-        # Before processing anything, normalise input image to scale between 0 and 1, and transfer to GPU as needed
+        ## Before processing anything, normalise input image to scale between 0 and 1, and transfer to GPU as needed
         img = _preprocess_image(img_data._image)
         img = xp.asarray(img)  # CuPy or NumPy, depending on backend
 
-        ## Shear angle handling
-        # If shear angle is not provided, compute shear angles where needed
+        # Shear angle handling
+        ## If shear angle is not provided, compute shear angles where needed
         if shear is None:
-            # If not inferring from the first image, or if it's the first loop, get shear angle and image dimensions
+            ## If not inferring from the first image, or if it's the first loop, get shear angle and image dimensions
             if not general_config.infer_from_first or i == 0:
-                # Check for logs firstly
+                ### Check for logs firstly
                 shear_df, shear = load_shear_log(out_dir["logs"], img_data.image_path)
-                # If no log exists, compute manually
+                ### If no log exists, compute manually
                 if shear is None:
                     shear = compute_shear(img)
 
-                    # This is the perfect time to write out to registry and save an overlay image for shear angle QC
+                    ## This is the perfect time to write out to registry and save an overlay image for shear angle QC
                     shear_df = update_shear_log(shear_df, img_data.image_path, shear)
                     save_shear_log(shear_df, out_dir["logs"])
-                    # To create and write out the shear angle overlay image
+                    ## Create and write out the shear angle overlay image
                     shear_overlay = draw_shear_vector(img, shear)
                     shear_overlay = to_uint8(shear_overlay)
-                    # Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
+                    ## Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
                     cv2.imwrite((out_dir["qc"] / Path(img_data.image_path).stem).with_suffix(".tiff"),
                                 ensure_numpy(shear_overlay))
 
-                # Store first computed shear if to be used for stack processing
+                ## Store first computed shear if to be used for stack processing
                 if i == 0:
                     first_shear = shear
 
-            # If inferring from first image and not first run, use the stashed shear angle for reconstruction
+            ## If inferring from first image and not first run, use the stashed shear angle for reconstruction
             else:
                 shear = first_shear
 
-        # If in stack mode, perform check to ensure stack images are all the same dimension and create PSF and smoothing kernels
-        # This workflow will prevent the need for unnecessary reprocessing through the image stack
+        # If in stack mode, perform check to ensure stack images are all the same dimension
+        ## This workflow will prevent the need for unnecessary reprocessing through the image stack
         if general_config.mode == "stack" and i == 0:
-            # For the first image, store expected dimensions and create stock input fields
+            ## For the first image, store expected dimensions and create stock input fields
             ndim = img.shape
-            # If running in stack, I'll also want to write out PSF and smoothing matrices to prevent computation each iteration
-
         # For images in a stack following the first, ensure dimensions conform
         elif general_config.mode == "stack":
             if img.shape != ndim:
                 raise ValueError(f"Dimensions of image stack don't match! Check images 0 and {i}...")
 
-        ## Now that critical variables are established, run the reconstruction itself
-        # Store these variables as empty to begin with, to capture from first run if in stack
-        psf_stack = None
-        smooth_stack = None
-        img_stack = []
-        # To handle multiple input parameters, iterate through all combinations, checking parameter settings to infer write location
-        for smooth_it, stabil_it in tqdm(param_combinations, desc="Reconstructing", total=len(param_combinations), position=1, leave=False):
-            img_recon, psf_stack, smooth_stack = qpi_reconstruct(img, smooth_in=smooth_it, stabil_in=stabil_it, shear_angle=shear, psf_trans=psf_stack, smooth_trans=smooth_stack)
+        # Now that critical variables are established, run the reconstruction itself
+        ## To handle multiple input parameters, iterate through all combinations - use reconstruction object logic to compute this
+        for params in tqdm(recon_params, desc="Reconstructing", total=param_comb_count, position=1, leave=False):
+            recon.set_params(params)
+            img_recon = recon.run(img, shear)
+
+            # Invert here if needed - assuming images are converted to 8-bit float at this point
+            if general_config.invert:
+                img_recon = img_recon * -1
 
             # If contrast adjustment is desired and running in batch mode, adjust contrast according to single image pixel intensities
             if general_config.contrast_adj and general_config.mode == "batch":
-                img_recon = contrast_adjust(img_recon, xp)
+                img_recon = contrast_adjust(img_recon, xp,lower_q = general_config.lower_q, upper_q = general_config.upper_q)
 
-            # Compute quality metrics and write to dictionary for dataframe conversion in logging
+            # Now write all useful results to out output list of dictionaries
+            ## Firstly, we need the correct image filter to compute quality metrics
             filter_module = get_filter_backend(xp)
-            qual_mets.append({'File': str(img_data.image_path),
-                              'Smoothing': smooth_it,
-                              'Stability': stabil_it,
-                              'Shear': shear,
-                              'Shear Meta-accuracy': analyse_shear(img_recon, shear, xp, filter_module),
-                              'Sharp': analyse_sharpness(img_recon, filter_module),
-                              'Contrast': analyse_contrast(img_recon, filter_module),
-                              'Resolution': analyse_resolution(img_recon, xp, filter_module)})
+            ## Now compute quality metrics and write to dictionary for dataframe conversion in logging
+            qual_mets = ({'File': str(img_data.image_path),
+                          'Method': reconstruction_config.method,
+                          'Shear': shear,
+                          'ShearResolution': analyse_shear(img_recon, shear, xp, filter_module),
+                          'Sharp': analyse_sharpness(img_recon, filter_module),
+                          'Contrast': analyse_contrast(img_recon, filter_module),
+                          'Resolution': analyse_resolution(img_recon, xp, filter_module),
+                          'Params': recon.get_params()})
 
-            # Before writing out, convert to 8-bit image format
-            img_recon = to_uint8(ensure_numpy(img_recon))
+            ## Write everything out here!
+            image_out.append({'reconstruction': ensure_numpy(img_recon),
+                              'input_path': img_data.image_path,
+                              'output_path': img_data.get_output_path(out_dir["recon"]),
+                              'quality': qual_mets,
+                              'params': recon.get_params()
+                              })
 
-            # Look for correct output directory before writing out reconstruction
-            write_file = _get_output_path(img_data.get_output_path(out_dir["recon"]), smooth_it, stabil_it, len(smooth_in), len(stabil_in))
-            # Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
-            cv2.imwrite(write_file, img_recon)
-            # Finally, cache the reconstructed image to write out collage if needed
-            img_stack.append(img_recon)
-
+        # At the end of the loop, and if not runnin in stack mode, wipe re-usable reconstruction parameters
         if not general_config.mode == "stack":
-            psf_matrix = None
-            smooth_matrix = None
+            recon.wipe()
 
         # For each image, write out collage if specified
         if general_config.write_collage:
             from .logging import create_collage_grid
-            create_collage_grid(img_stack, param_combinations, out_dir["qc"], img_data.image_path)
+            create_collage_grid([item["reconstruction"] for item in image_out],[item["params"] for item in image_out],
+                                out_dir["qc"], image_out[0]["input_path"])
+            #[create_collage_grid(item["reconstruction"], recon_params, recon_label, out_dir["qc"], img_data.image_path) for item in recon_out]
+
+        # Finally, expand our global output list using our per-image data
+        recon_out.extend(image_out)
 
     # If contrast adjustment is desired and running in stack mode, adjust contrast according to global pixel intensities
     if general_config.contrast_adj and general_config.mode == "stack":
-        img_recon = contrast_adjust(img_recon)
+        for item in recon_out:
+            item["reconstruction"] = contrast_adjust(item["reconstruction"])
 
     # Once loop is completed, write out QC metrics
-    save_quality(qual_mets, out_dir["qc"])
+    save_quality([item["quality"] for item in image_out], out_dir["qc"])
+
+    # Finally, loop through the cached, reconstructed images and write out
+    for item in recon_out:
+        # Before writing out, convert to 8-bit image format
+        img = to_uint8(item["reconstruction"])
+        ## Look for correct output directory before writing out reconstruction
+        write_file = _get_output_path(item["output_path"], reconstruction_config.method, item["params"])
+        ## Write out to the QC folder, using the input file name as a prefix - need to convert CuPy arrays to NumPy
+        cv2.imwrite(write_file, img)
+
+    # Finally, if CellPose segmentation is desired, execute here on a per-image basis
+    if general_config.run_cellpose:
+        files_in # infer input images to run on from image list
+        run_cellpose(recon_out[0]["reconstruction"], segmentation_config.model_type, segmentation_config.diameter)
+    return recon_out

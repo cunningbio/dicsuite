@@ -18,6 +18,12 @@ Future updates are to come to incorporate the following features:
 - CellPose interfacing for DIC-powered cell segmentation
 - Deep learning-powered reconstruction algorithms
 ---
+### Installation
+PyPI Package coming soon. While awaiting official package release, install via GitHub via:
+```bash
+pip install git+https://github.com/cunningbio/dicsuite.git
+```
+
 #### Quickstart
 To run a sample reconstruction using the provided agar bead image:
 
@@ -28,11 +34,7 @@ python run_recon.py
 
 #### Requirements
 DICsuite requires Python ≥3.8 and <3.12. Compatibility with Python 3.12+ is currently limited by external dependencies.
-To install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+If installing with optional Cellpose segmentation functionality, be aware of additional dependencies - this might be a large install, sometimes requiring a functional CUDA/PyTorch stack!
 
 #### Optional GPU Support
 If you want to use GPU acceleration, install CuPy separately:

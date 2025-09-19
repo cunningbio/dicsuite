@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import numpy as np
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Dict, Any
 
 @dataclass
 class ImageData:
@@ -28,15 +28,17 @@ class GeneralConfig:
     mode: str = "batch"
     infer_from_first: bool = True
     contrast_adj: bool = True
+    lower_q: float = 0.25
+    upper_q: float = 0.95
     use_gpu: bool = True
     write_collage: bool = True
+    invert: bool = False
 
 @dataclass
 class ReconstructionConfig:
-    method: str = "inverse"
-    smooth_in: float | List = field(default_factory=lambda: [0.000001,0.00001,0.0001,0.001,0.01,0.1,1,10])
-    stabil_in: float | List = field(default_factory=lambda: [0.000001,0.00001,0.0001,0.001,0.01,0.1,1,10])
+    method: str = "yin"
     shear_angle: Optional[float] = None
+    method_params: dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class SegmentationConfig:

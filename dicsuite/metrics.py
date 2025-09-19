@@ -28,6 +28,4 @@ def analyse_shear(image_in, shear_angle, xp, mod):
     gradient_incorr = mod.grey_dilation(image_in, footprint = se_incorr) - mod.grey_erosion(image_in, footprint = se_incorr)
 
     # Return the difference between the two
-    #return xp.sum(gradient_corr) - xp.sum(gradient_incorr)
-    # OR return just the gradient of the correct angle
-    return xp.sum(gradient_corr)
+    return xp.sum(gradient_corr) - xp.sum(gradient_incorr)

@@ -1,6 +1,6 @@
 [project]
 name = "dicsuite"
-version = "0.1.2"
+version = "0.2.0"
 description = "DIC-to-QPI Reconstruction Toolkit with CPU/GPU support"
 authors = [
     {name = "Richard Cunningham",email = "ricky-cunningham@live.com"}
@@ -20,6 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["cupy-cuda12x"]
+cellpose = ["cellpose>=3.0,<4.0"]
+all = ["cupy-cuda12x", "cellpose>=3.0,<4.0"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -4,7 +4,6 @@ from skimage.draw import line
 from skimage.transform import rotate as sk_rotate
 
 from .backend import get_array_module, get_filter_backend
-from .utils import ensure_list
 
 ## All defined functions assume images are normalised with pixel intensities between 0-1
 def linear_strel(se_length, se_angle, xp = None):
@@ -46,6 +45,81 @@ def linear_strel(se_length, se_angle, xp = None):
 
     return strel
 
+# Helper function for Gaussian-derivative PSF generating
+def get_gauss_deriv(size=None, sigma=0.5, direction=0, xp = None):
+    # If no backend is passed, default to NumPy processing
+    if xp is None:
+        xp = np
+    direction = math.pi - xp.deg2rad(direction)  # Convert to radians
+    if size is None:
+        size = math.ceil(6 * sigma + 1)
+        if size % 2 == 0:
+            size = size + 2
+    # Creating kernel
+    gauss_out = xp.array([]).reshape(0, size)
+    for i in xp.arange(size) + 1:
+        row_out = i - math.ceil(size / 2)
+        col_out = [j - math.ceil(size / 2) for j in xp.arange(size) + 1]
+        to_out = xp.array(
+            [-x * math.exp(-(x ** 2 + row_out ** 2) / sigma ** 2) * math.cos(direction) for x in col_out])
+        to_out = to_out + xp.array(
+            [-row_out * math.exp(-(x ** 2 + row_out ** 2) / sigma ** 2) * math.sin(direction) for x in col_out])
+        gauss_out = xp.concatenate((gauss_out, to_out.reshape(1, size)), axis=0)
+    gauss_out = gauss_out / xp.sum(xp.abs(gauss_out))
+    gauss_out[
+        xp.abs(gauss_out) < xp.finfo(xp.float64).eps] = 0
+    return (gauss_out)
+
+
+def wiener_filter(image, psf, balance, xp, value_range=(-1, 1)):
+    """
+    CuPy-compatible Wiener filter (single-channel).
+
+    Args:
+        image (ndarray): 2D grayscale image, assumed normalised and float32.
+        use_gpu (bool): True if GPU processing is preferred (default is False).
+        von_mises (bool): True if inferring optimal shear angle using von Mises distribution,
+            otherwise return max value (default is True)
+
+    Returns:
+        int: Computed shear angle.
+
+    Args:
+        image (numpy.ndarray or cupy.ndarray): 2D grayscale image, assumed normalised and float32.
+        psf (numpy.ndarray or cupy.ndarray): Point spread function (same size or broadcastable to image).
+        balance (float): Regularization constant (maps to `balance` in skimage's wiener function).
+        value_range (tuple): Min/max clamp values, to match skimage.
+
+    Returns:
+        numpy.ndarray or cupy.ndarray: Wiener-deconvolved image.
+
+    """
+    # Ensure arrays are CuPy
+    image = xp.asarray(image, dtype=xp.float32)
+    psf = xp.asarray(psf, dtype=xp.float32)
+
+    # Pad PSF to match image size
+    pad_shape = [(0, s - ps) for (s, ps) in zip(image.shape, psf.shape)]
+    psf_padded = xp.pad(psf, pad_shape, mode='constant')
+    psf_padded = xp.pad(psf, pad_shape, mode='constant')
+    psf_padded = xp.roll(psf_padded, shift=(-psf.shape[0]//2, -psf.shape[1]//2), axis=(0,1))
+
+    # FFTs
+    image_fft = xp.fft.fft2(image)
+    psf_fft = xp.fft.fft2(psf_padded)
+
+    # Wiener filter in frequency domain
+    psf_conj = xp.conj(psf_fft)
+    denom = xp.abs(psf_fft)**2 + balance
+    result_fft = psf_conj / denom * image_fft
+
+    # Back to spatial domain
+    result = xp.fft.ifft2(result_fft).real
+
+    # Clip output
+    result = xp.clip(result, value_range[0], value_range[1])
+    return result
+
 ## Array handling functions, for PSF and smoothing kernels
 def pad_fft(arr, img, xp):
     """
@@ -57,10 +131,11 @@ def pad_fft(arr, img, xp):
                      constant_values=0)
     return xp.fft.fftshift(xp.fft.fft2(arr_pad))
 
-def create_psf(shear_angle):
+def create_psf(psf ,shear_angle):
     if shear_angle % 45 != 0:
         raise ValueError("Shear angle must be multiple of 45 degrees to create PSF!")
-    psf = np.array([[0, 0, 0], [0, -1, 1], [0, 0, 0]], dtype=float) / 2
+    if psf is None:
+        psf = np.array([[0, 0, 0], [0, -1, 1], [0, 0, 0]], dtype=float) / 2
     psf = sk_rotate(psf, 180 + shear_angle, resize=False, order=0)  # Setting order to 0 gets around need to check 45 degree compatibility
     return(psf)
 
@@ -146,95 +221,3 @@ def draw_shear_vector(image, shear_angle):
     shear_to_out = np.clip(shear_to_out, 0, 1)
 
     return(shear_to_out)
-
-def qpi_reconstruct(image, smooth_in = 1, stabil_in = 0.0001, shear_angle=None, psf_trans = None, smooth_trans = None, rotate_correct = True):
-    """
-    Reconstructs estimate of QPI from DIC image input using the ZZY algorithm.
-    Handles both CPU and GPU arrays depending on `use_gpu` flag.
-
-    Args:
-        image (ndarray): 2D grayscale image, preferably float32.
-        smooth_in (int): Smoothing parameter.
-        stabil_in (int): Stability parameter.
-        shear_angle (float, optional): Shear angle of DIC image in degrees. If not specified, shear angle is estimated.
-        psf_trans (ndarray, optional): PSF matrix, padded and Fourier transformed.
-        smooth_trans (ndarray, optional): Smoothing kernel, padded and Fourier transformed.
-        rotate_correct (bool): True if rotating input image to correct for shear angles that are not multiples of 45° (default is True).
-
-
-    Returns:
-        xp.ndarray: Reconstructed image.
-            ndarray of type matching xp (e.g., numpy.ndarray or cupy.ndarray)
-
-    """
-    # Determine whether or not to use CPU- or GPU-based modules
-    xp = get_array_module(image)
-    filter_module = get_filter_backend(xp)
-
-    ## Error catching and argument cleaning
-    # Cast shear angle to float if needed
-    if shear_angle is not None:
-        try:
-            shear_angle = float(shear_angle)
-        except (ValueError, TypeError):
-            raise ValueError("shear_angle must be a numeric type or None")
-    else:
-        shear_angle = compute_shear(image)
-
-    # Convert image to 32-bit if needed
-    if not xp.issubdtype(image.dtype, xp.floating):
-        image = image.astype(xp.float32)
-
-    ## Begin with simple image adjustments
-    # If correcting for shear angle rounding errors, rotate the image to match the shear angle and set angle to 0
-    if rotate_correct:
-        image_dim = image.shape
-        image = filter_module.rotate(image, -shear_angle, reshape=True, mode = "nearest")
-        rerotate = shear_angle
-        shear_angle = 0
-
-    # Round the estimated direction to the nearest multiple of 45 degrees
-    shear_angle = np.round(shear_angle / 45) * 45
-
-    # If PSF or smoothing kernels aren't provided, create here and pad with 0s to match dimensions of input image
-    # Padding ensures the kernel is centered and ready for Fourier transform
-    if psf_trans is None:
-        # Instantiate PSF matrix and rotate along shear direction
-        psf = create_psf(shear_angle)
-        # As PSF rotation is locked to NumPy array, transfer to GPU if necessary
-        psf = xp.array(psf)
-        psf_trans = pad_fft(psf, image, xp)
-
-    if smooth_trans is None:
-        # Set smoothing kernel
-        smooth = xp.array([[1, 1, 1], [1, -8, 1], [1, 1, 1]], dtype=float) / 8
-        smooth_trans = pad_fft(smooth, image, xp)
-
-    ## Now transform the image itself!
-    image_trans = image - xp.mean(image)
-    image_trans = xp.fft.fftshift(xp.fft.fft2(image_trans, [(2 * image_trans.shape[0]) - 1, (2 * image_trans.shape[1]) - 1]))
-    image_recon = -(psf_trans * image_trans) / (smooth_in * smooth_trans * smooth_trans + stabil_in - psf_trans * psf_trans)  # Reconstruction formula with regularization
-
-    ## Reverse the Fourier shift, undoing the previous `fftshift`
-    # This prepares the frequency-domain data to be transformed back to the spatial domain
-    image_recon = xp.fft.ifftshift(image_recon)
-    image_recon = xp.fft.ifft2(image_recon)
-
-    # The `real` part is extracted and rescaled to get the final reconstructed image in the spatial domain.
-    recon_out = (image_recon.real - image_recon.real.min()) / (image_recon.real.max() - image_recon.real.min())
-
-    # Trim padding - after transformation, padding has flipped, so extract the trailing rows/columns
-    recon_out = recon_out[xp.arange((recon_out.shape[0] - image.shape[0]), recon_out.shape[0]), :][:,
-                xp.arange((recon_out.shape[1] - image.shape[1]), recon_out.shape[1])]
-
-    # If rotated, rerotate back into the starting angle
-    if rotate_correct:
-        recon_out = filter_module.rotate(recon_out, rerotate, reshape=False)
-        # Cut  the image down to omit edges
-        recon_out = recon_out[math.ceil((recon_out.shape[0] - image_dim[0]) / 2):math.ceil(
-            recon_out.shape[0] - ((recon_out.shape[0] - image_dim[0]) / 2)),
-                    math.ceil((recon_out.shape[1] - image_dim[1]) / 2):math.ceil(
-                        recon_out.shape[1] - ((recon_out.shape[1] - image_dim[1]) / 2))]
-        shear_angle = rerotate  # Output complete, non-rounded shear angle for future work!
-
-    return recon_out, psf_trans, smooth_trans

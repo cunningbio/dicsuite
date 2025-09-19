@@ -1,12 +1,21 @@
 from pathlib import Path
+import math
 
 def param_to_str(name, value):
     """
     Helper function to format input parameters into filenames.
     """
     # Realistically, minus values aren't likely to be passed here - commented out handling for potential future use-cases!
-    val = str(value).replace('.', '_')#.replace('-', 'm')  # m for minus
+    val = str(value).replace('.', '_')
     return f"{name}-{val}"
+
+def grid_shape(n):
+    """
+    Helper function to format input parameters into filenames.
+    """
+    rows = int(math.floor(math.sqrt(n)))
+    cols = math.ceil(n / rows)
+    return rows, cols
 
 # To cast input as iterable if needed
 def ensure_list(x):
