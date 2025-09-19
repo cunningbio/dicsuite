@@ -1,7 +1,11 @@
-from cellpose import models, plot
 import matplotlib.pyplot as plt
 
 def run_cellpose(image, model):
+    # First, try import the cellpose package
+    try:
+        from cellpose import models, plot
+    except ImportError as e:
+        raise ImportError("Cellpose is not installed. Install with `pip install dicsuite[cellpose]`.") from e
     # Initialize pretrained cytoplasm model (GPU-enabled)
     model = models.Cellpose(gpu=True, model_type='cyto')
     # Run segmentation

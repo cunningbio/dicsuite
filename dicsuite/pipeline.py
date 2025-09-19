@@ -344,6 +344,5 @@ def qpi_reconstruct_batch(
 
     # Finally, if CellPose segmentation is desired, execute here on a per-image basis
     if general_config.run_cellpose:
-        files_in # infer input images to run on from image list
         run_cellpose(recon_out[0]["reconstruction"], segmentation_config.model_type, segmentation_config.diameter)
     return recon_out

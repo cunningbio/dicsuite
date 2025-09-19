@@ -35,6 +35,7 @@ python run_recon.py
 #### Requirements
 DICsuite requires Python ≥3.8 and <3.12. Compatibility with Python 3.12+ is currently limited by external dependencies.
 If installing with optional Cellpose segmentation functionality, be aware of additional dependencies - this might be a large install, sometimes requiring a functional CUDA/PyTorch stack!
+Additionally, Cellpose installation earlier versions of NumPy. 
 
 #### Optional GPU Support
 If you want to use GPU acceleration, install CuPy separately:
